@@ -74,8 +74,11 @@ export async function handleGenerateItineraryApi(
     };
   }
 
-  // Em produção, a chave GEMINI_API_KEY fica isolada aqui no servidor
-  const apiKey = process.env.GEMINI_API_KEY || 'AIzaSy_SMARTTRIP_SERVER_SECRET_KEY';
+  // Em produção/desenvolvimento, a chave GEMINI_API_KEY é lida estritamente das variáveis de ambiente
+  const apiKey = 
+    (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) ||
+    (typeof import.meta !== 'undefined' && (import.meta as any).env ? ((import.meta as any).env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY) : '') ||
+    '';
 
   try {
     // Chamada real à API REST do Gemini (gemini-1.5-flash) ou simulador seguro
