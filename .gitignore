@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Production Build
+dist/
+build/
+
+# Testing & Coverage
+coverage/
+
+# Logs & Temporary Files
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Environment Variables & Secrets (CRITICAL SECURITY RULE)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+!.env.example

@@ -1,0 +1,6 @@
+{
+  "name": "SmartTrip - Roteiros Inteligentes com IA",
+  "description": "Planejador de viagens autêntico e inteligente com roteiros gerados por IA, sincronização em grupo e detalhes de pontos turísticos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
