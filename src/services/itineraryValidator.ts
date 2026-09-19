@@ -1,182 +1,283 @@
 /**
- * SmartTrip Itinerary Output Contract & Validator
+ * VALIDADOR DE CONTRATO DO ROTEIRO SMARTTRIP
  * 
- * Este módulo define os tipos do contrato estruturado do roteiro SmartTrip
- * e fornece funções utilitárias simples para alunos e validadores verificarem
- * a conformidade de roteiros gerados contra o contexto da viagem e POIs factuais.
+ * Centraliza a validação reutilizável do contrato do roteiro antes da integração real com Gemini.
+ * Garante que a saída atenda a todas as invariantes e regras de segurança sem chamar a API do Gemini.
  */
 
+import {
+  SmartTripItineraryContract,
+  ValidationContext,
+  ValidationResult,
+  DayPlanContract,
+  ActivityContract,
+  WeatherSummaryContract
+} from '../types/itinerary';
 import { NormalizedPoi } from './places';
 
-export interface WeatherSummaryContract {
-  condition: string;
-  tempMin: number | null;
-  tempMax: number | null;
-  rainProbability: number | null;
-}
+// Re-exporta tipos para conveniência sem duplicar definições
+export type {
+  SmartTripItineraryContract,
+  ValidationContext,
+  ValidationResult,
+  DayPlanContract,
+  ActivityContract,
+  WeatherSummaryContract
+};
 
-export interface ActivityContract {
-  placeId: string;
-  name: string;
-  periodOrTime: string;
-  justification: string;
-  notes?: string;
-}
-
-export interface DayPlanContract {
-  date: string; // YYYY-MM-DD
-  weatherSummary: WeatherSummaryContract | null;
-  activities: ActivityContract[];
-}
-
-export interface SmartTripItineraryContract {
-  title: string;
-  summary: string;
-  alerts: string[];
-  days: DayPlanContract[];
-}
-
-export interface ValidationContext {
-  tripStartDate: string; // YYYY-MM-DD
-  tripEndDate: string;   // YYYY-MM-DD
-  providedPois: NormalizedPoi[];
-  currentDate?: string;  // YYYY-MM-DD (para verificação do horizonte meteorológico)
-}
-
-export interface ValidationResult {
-  isValid: boolean;
-  errors: string[];
-}
+const ALLOWED_ROOT_KEYS = new Set(['title', 'summary', 'alerts', 'days']);
+const ALLOWED_DAY_KEYS = new Set(['date', 'weatherSummary', 'activities']);
+const ALLOWED_WEATHER_KEYS = new Set(['condition', 'tempMin', 'tempMax', 'rainProbability']);
+const ALLOWED_ACTIVITY_KEYS = new Set(['placeId', 'name', 'periodOrTime', 'justification', 'notes']);
 
 /**
- * Valida um roteiro de viagem contra o contrato estrito SmartTrip e o contexto fornecido.
+ * Valida um payload de roteiro contra o contrato estrito SmartTrip e o contexto fornecido.
  */
 export function validateItineraryContract(
   itinerary: any,
   context: ValidationContext
 ): ValidationResult {
-  const errors: string[] = [];
+  const logErrors: string[] = [];
+  const allowExtra = context.allowExtraProperties === true;
 
-  if (!itinerary || typeof itinerary !== 'object') {
-    return { isValid: false, errors: ['O roteiro deve ser um objeto JSON válido.'] };
+  // 1. Validação Primária de Objeto
+  if (itinerary === null || itinerary === undefined || typeof itinerary !== 'object' || Array.isArray(itinerary)) {
+    logErrors.push('Payload do roteiro inválido: deve ser um objeto JSON não nulo.');
+    return buildResult(logErrors);
   }
 
-  // 1. Validação de Campos Raiz
-  if (!itinerary.title || typeof itinerary.title !== 'string' || itinerary.title.trim().length < 5) {
-    errors.push('O campo "title" é obrigatório e deve conter no mínimo 5 caracteres.');
+  // 1.1. Validação de Campos Extras no Nível Raiz
+  if (!allowExtra) {
+    const rootKeys = Object.keys(itinerary);
+    for (const key of rootKeys) {
+      if (!ALLOWED_ROOT_KEYS.has(key)) {
+        logErrors.push(`Campo extra não permitido no nível raiz: "${key}".`);
+      }
+    }
+  }
+
+  // 2. Validação do Campo "title"
+  if (!('title' in itinerary)) {
+    logErrors.push('Campo obrigatório ausente: "title".');
+  } else if (typeof itinerary.title !== 'string') {
+    logErrors.push(`Tipo incorreto para "title": esperado string, recebido ${typeof itinerary.title}.`);
+  } else if (itinerary.title.trim().length === 0) {
+    logErrors.push('O campo "title" não pode ser vazio ou conter apenas espaços.');
+  } else if (itinerary.title.trim().length < 5) {
+    logErrors.push(`O campo "title" é muito curto: mínimo de 5 caracteres (${itinerary.title.trim().length} fornecido).`);
   } else if (itinerary.title.length > 100) {
-    errors.push('O campo "title" deve ter no máximo 100 caracteres.');
+    logErrors.push(`O campo "title" excede o limite máximo de 100 caracteres (${itinerary.title.length} fornecido).`);
   }
 
-  if (!itinerary.summary || typeof itinerary.summary !== 'string' || itinerary.summary.trim().length < 10) {
-    errors.push('O campo "summary" é obrigatório e deve conter no mínimo 10 caracteres.');
+  // 3. Validação do Campo "summary"
+  if (!('summary' in itinerary)) {
+    logErrors.push('Campo obrigatório ausente: "summary".');
+  } else if (typeof itinerary.summary !== 'string') {
+    logErrors.push(`Tipo incorreto para "summary": esperado string, recebido ${typeof itinerary.summary}.`);
+  } else if (itinerary.summary.trim().length < 10) {
+    logErrors.push(`O campo "summary" é muito curto: mínimo de 10 caracteres.`);
   } else if (itinerary.summary.length > 300) {
-    errors.push('O campo "summary" deve ter no máximo 300 caracteres.');
+    logErrors.push(`O campo "summary" excede o limite máximo de 300 caracteres.`);
   }
 
-  if (!Array.isArray(itinerary.alerts)) {
-    errors.push('O campo "alerts" deve ser uma lista (array) de strings, podendo ser vazia [].');
+  // 4. Validação do Campo "alerts"
+  if (!('alerts' in itinerary)) {
+    logErrors.push('Campo obrigatório ausente: "alerts".');
+  } else if (!Array.isArray(itinerary.alerts)) {
+    logErrors.push(`Tipo incorreto para "alerts": esperado array de strings, recebido ${typeof itinerary.alerts}.`);
   } else {
-    itinerary.alerts.forEach((alert: any, idx: number) => {
-      if (typeof alert !== 'string' || alert.length > 200) {
-        errors.push(`O alerta #${idx + 1} deve ser uma string de até 200 caracteres.`);
+    itinerary.alerts.forEach((alertItem: any, idx: number) => {
+      if (typeof alertItem !== 'string') {
+        logErrors.push(`Tipo incorreto em "alerts[${idx}]": esperado string, recebido ${typeof alertItem}.`);
+      } else if (alertItem.length > 200) {
+        logErrors.push(`Alerta em "alerts[${idx}]" excede o limite de 200 caracteres.`);
       }
     });
   }
 
-  if (!Array.isArray(itinerary.days) || itinerary.days.length === 0) {
-    errors.push('O campo "days" deve ser uma lista não-vazia de dias.');
-    return { isValid: false, errors };
+  // 5. Validação do Campo "days"
+  if (!('days' in itinerary)) {
+    logErrors.push('Campo obrigatório ausente: "days".');
+    return buildResult(logErrors);
+  } else if (!Array.isArray(itinerary.days)) {
+    logErrors.push(`Tipo incorreto para "days": esperado array, recebido ${typeof itinerary.days}.`);
+    return buildResult(logErrors);
+  } else if (itinerary.days.length === 0) {
+    logErrors.push('O campo "days" deve ser uma lista não-vazia (mínimo 1 dia).');
+    return buildResult(logErrors);
   }
 
-  // Mapeamento de POIs factuais por ID para busca O(1)
+  // Mapeamento O(1) de POIs factuais por ID
   const poiMap = new Map<string, NormalizedPoi>();
-  context.providedPois.forEach(poi => {
-    poiMap.set(poi.id, poi);
-  });
+  if (Array.isArray(context.providedPois)) {
+    context.providedPois.forEach(poi => {
+      if (poi && poi.id) {
+        poiMap.set(poi.id, poi);
+      }
+    });
+  }
 
   const refDate = context.currentDate ? new Date(context.currentDate) : new Date();
 
-  // 2. Validação de Dias e Atividades
+  // 6. Validação Detalhada de Cada Dia
   itinerary.days.forEach((day: any, dayIdx: number) => {
     const dayLabel = `Dia #${dayIdx + 1}`;
 
-    if (!day.date || typeof day.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
-      errors.push(`${dayLabel}: O campo "date" é obrigatório no formato YYYY-MM-DD.`);
+    if (day === null || typeof day !== 'object' || Array.isArray(day)) {
+      logErrors.push(`${dayLabel}: Deve ser um objeto JSON válido.`);
+      return;
+    }
+
+    // Campos extras no dia
+    if (!allowExtra) {
+      Object.keys(day).forEach(key => {
+        if (!ALLOWED_DAY_KEYS.has(key)) {
+          logErrors.push(`${dayLabel}: Campo extra não permitido: "${key}".`);
+        }
+      });
+    }
+
+    // 6.1. Data do Dia
+    if (!('date' in day)) {
+      logErrors.push(`${dayLabel}: Campo obrigatório ausente: "date".`);
+    } else if (typeof day.date !== 'string') {
+      logErrors.push(`${dayLabel}: Tipo incorreto para "date": esperado string, recebido ${typeof day.date}.`);
+    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(day.date)) {
+      logErrors.push(`${dayLabel}: Formato de data inválido "${day.date}". Esperado YYYY-MM-DD.`);
     } else {
-      // Invariante: Pertencimento ao intervalo da viagem
+      // Regra: Data deve pertencer ao período da viagem
       if (day.date < context.tripStartDate || day.date > context.tripEndDate) {
-        errors.push(`${dayLabel}: A data "${day.date}" está fora do intervalo da viagem (${context.tripStartDate} a ${context.tripEndDate}).`);
+        logErrors.push(`${dayLabel}: Data "${day.date}" fora do período da viagem (${context.tripStartDate} a ${context.tripEndDate}).`);
       }
 
-      // Invariante: Ausência de Clima Fictício fora do horizonte (> 14 dias)
+      // Regra: Não inventar clima numérico fora do horizonte (> 14 dias)
       const dayDateObj = new Date(day.date);
       const diffDays = Math.round((dayDateObj.getTime() - refDate.getTime()) / (1000 * 60 * 60 * 24));
-
       if (diffDays > 14 || diffDays < 0) {
-        if (day.weatherSummary !== null) {
-          // Se tiver dados numéricos específicos quando fora do horizonte, é erro
+        if (day.weatherSummary !== null && typeof day.weatherSummary === 'object') {
           if (day.weatherSummary.tempMin !== null || day.weatherSummary.tempMax !== null) {
-            errors.push(`${dayLabel}: Previsão meteorológica numérica proibida para datas fora do horizonte (${day.date}). O campo "weatherSummary" deve ser null.`);
+            logErrors.push(`${dayLabel}: Previsão meteorológica numérica proibida para datas fora do horizonte (${day.date}). O campo "weatherSummary" deve ser null.`);
           }
         }
       }
     }
 
-    // Validação do objeto weatherSummary se presente
-    if (day.weatherSummary !== null && typeof day.weatherSummary === 'object') {
-      if (typeof day.weatherSummary.condition !== 'string') {
-        errors.push(`${dayLabel}: "weatherSummary.condition" deve ser uma string.`);
+    // 6.2. WeatherSummary
+    if (!('weatherSummary' in day)) {
+      logErrors.push(`${dayLabel}: Campo obrigatório ausente: "weatherSummary" (utilize null se indisponível).`);
+    } else if (day.weatherSummary !== null) {
+      if (typeof day.weatherSummary !== 'object' || Array.isArray(day.weatherSummary)) {
+        logErrors.push(`${dayLabel}: Tipo incorreto para "weatherSummary": esperado objeto ou null, recebido ${typeof day.weatherSummary}.`);
+      } else {
+        if (!allowExtra) {
+          Object.keys(day.weatherSummary).forEach(key => {
+            if (!ALLOWED_WEATHER_KEYS.has(key)) {
+              logErrors.push(`${dayLabel}, weatherSummary: Campo extra não permitido: "${key}".`);
+            }
+          });
+        }
+
+        if (!('condition' in day.weatherSummary) || typeof day.weatherSummary.condition !== 'string') {
+          logErrors.push(`${dayLabel}, weatherSummary: Campo "condition" é obrigatório e deve ser string.`);
+        }
       }
     }
 
-    // Validação de atividades
-    if (!Array.isArray(day.activities) || day.activities.length === 0) {
-      errors.push(`${dayLabel}: Deve conter ao menos 1 atividade.`);
+    // 6.3. Atividades
+    if (!('activities' in day)) {
+      logErrors.push(`${dayLabel}: Campo obrigatório ausente: "activities".`);
+    } else if (!Array.isArray(day.activities)) {
+      logErrors.push(`${dayLabel}: Tipo incorreto para "activities": esperado array, recebido ${typeof day.activities}.`);
+    } else if (day.activities.length === 0) {
+      logErrors.push(`${dayLabel}: Lista de "activities" não pode ser vazia (mínimo 1 atividade).`);
     } else if (day.activities.length > 6) {
-      errors.push(`${dayLabel}: Não pode conter mais de 6 atividades por dia.`);
+      logErrors.push(`${dayLabel}: Não pode conter mais de 6 atividades por dia (${day.activities.length} fornecido).`);
     } else {
       day.activities.forEach((act: any, actIdx: number) => {
         const actLabel = `${dayLabel}, Atividade #${actIdx + 1}`;
 
-        if (!act.placeId || typeof act.placeId !== 'string') {
-          errors.push(`${actLabel}: O campo "placeId" é obrigatório.`);
+        if (act === null || typeof act !== 'object' || Array.isArray(act)) {
+          logErrors.push(`${actLabel}: Deve ser um objeto JSON.`);
+          return;
+        }
+
+        if (!allowExtra) {
+          Object.keys(act).forEach(key => {
+            if (!ALLOWED_ACTIVITY_KEYS.has(key)) {
+              logErrors.push(`${actLabel}: Campo extra não permitido: "${key}".`);
+            }
+          });
+        }
+
+        // placeId
+        if (!('placeId' in act)) {
+          logErrors.push(`${actLabel}: Campo obrigatório ausente: "placeId".`);
+        } else if (typeof act.placeId !== 'string' || act.placeId.trim() === '') {
+          logErrors.push(`${actLabel}: O campo "placeId" não pode ser vazio ou de tipo incorreto.`);
         } else {
-          // Invariante: Rastreabilidade Factual de Locais
+          // Regra: placeId deve existir na lista factual fornecida
           const matchedPoi = poiMap.get(act.placeId);
           if (!matchedPoi) {
-            errors.push(`${actLabel}: O placeId "${act.placeId}" não existe no catálogo factual de POIs fornecidos.`);
-          } else {
-            // Nome deve corresponder ao POI factual
-            if (act.name && act.name.trim().toLowerCase() !== matchedPoi.name.trim().toLowerCase()) {
-              errors.push(`${actLabel}: O nome "${act.name}" não corresponde ao nome factual "${matchedPoi.name}" do POI.`);
-            }
+            logErrors.push(`${actLabel}: O placeId "${act.placeId}" é desconhecido (não consta no catálogo de POIs fornecido).`);
+          } else if (act.name && typeof act.name === 'string' && act.name.trim().toLowerCase() !== matchedPoi.name.trim().toLowerCase()) {
+            logErrors.push(`${actLabel}: Nome "${act.name}" incoerente com o nome factual "${matchedPoi.name}" do POI.`);
           }
         }
 
-        if (!act.name || typeof act.name !== 'string') {
-          errors.push(`${actLabel}: O campo "name" é obrigatório.`);
+        // name
+        if (!('name' in act)) {
+          logErrors.push(`${actLabel}: Campo obrigatório ausente: "name".`);
+        } else if (typeof act.name !== 'string' || act.name.trim() === '') {
+          logErrors.push(`${actLabel}: O campo "name" é obrigatório e deve ser uma string.`);
         }
 
-        if (!act.periodOrTime || typeof act.periodOrTime !== 'string' || act.periodOrTime.length > 30) {
-          errors.push(`${actLabel}: O campo "periodOrTime" é obrigatório (máximo 30 caracteres).`);
+        // periodOrTime
+        if (!('periodOrTime' in act)) {
+          logErrors.push(`${actLabel}: Campo obrigatório ausente: "periodOrTime".`);
+        } else if (typeof act.periodOrTime !== 'string') {
+          logErrors.push(`${actLabel}: Tipo incorreto para "periodOrTime": esperado string, recebido ${typeof act.periodOrTime}.`);
+        } else if (act.periodOrTime.length > 30) {
+          logErrors.push(`${actLabel}: O campo "periodOrTime" excede o limite máximo de 30 caracteres.`);
         }
 
-        if (!act.justification || typeof act.justification !== 'string') {
-          errors.push(`${actLabel}: O campo "justification" é obrigatório.`);
+        // justification
+        if (!('justification' in act)) {
+          logErrors.push(`${actLabel}: Campo obrigatório ausente: "justification".`);
+        } else if (typeof act.justification !== 'string') {
+          logErrors.push(`${actLabel}: Tipo incorreto para "justification": esperado string, recebido ${typeof act.justification}.`);
         } else if (act.justification.length > 150) {
-          errors.push(`${actLabel}: A justificativa excede 150 caracteres (possui ${act.justification.length} caracteres).`);
+          logErrors.push(`${actLabel}: A justificativa excede o limite máximo de 150 caracteres (${act.justification.length} caracteres).`);
         }
 
-        if (act.notes && (typeof act.notes !== 'string' || act.notes.length > 150)) {
-          errors.push(`${actLabel}: O campo "notes" (se informado) deve ter no máximo 150 caracteres.`);
+        // notes (opcional)
+        if ('notes' in act && act.notes !== undefined && act.notes !== null) {
+          if (typeof act.notes !== 'string') {
+            logErrors.push(`${actLabel}: Tipo incorreto para "notes": esperado string.`);
+          } else if (act.notes.length > 150) {
+            logErrors.push(`${actLabel}: O campo "notes" excede o limite de 150 caracteres.`);
+          }
         }
       });
     }
   });
 
+  return buildResult(logErrors);
+}
+
+/**
+ * Constrói uma resposta padronizada com erros técnicos legíveis para logs e mensagem segura para o usuário.
+ */
+function buildResult(logErrors: string[]): ValidationResult {
+  const isValid = logErrors.length === 0;
+  
+  let userMessage = 'Roteiro validado com sucesso.';
+  if (!isValid) {
+    userMessage = 'Não foi possível validar o roteiro gerado devido a inconsistências de estrutura ou dados factuais. Por favor, tente gerar novamente.';
+  }
+
   return {
-    isValid: errors.length === 0,
-    errors
+    isValid,
+    logErrors,
+    userMessage
   };
 }
